@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Adelanto de Nómina - Hedera Testnet</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 20px auto; }
+    button { margin: 5px 0; padding: 6px 10px; cursor: pointer; }
+    input { padding: 4px 6px; margin: 3px 0; width: 100%; box-sizing: border-box; }
+    .card { border: 1px solid #ccc; border-radius: 8px; padding: 12px; margin-bottom: 16px; }
+    .title { font-weight: bold; margin-bottom: 6px; }
+    #status { margin-bottom: 12px; font-size: 0.9rem; color: #555; }
+  </style>
+</head>
+<body>
+  <h1>Adelanto de Nómina - Hedera (Testnet)</h1>
+  <div id="status">No conectado.</div>
+  <button id="connectBtn">Conectar MetaMask</button>
+
+  <div class="card">
+    <div class="title">Info básica</div>
+    <div>Cuenta conectada: <span id="account"></span></div>
+    <div>Balance contrato: <span id="contractBalance">-</span> HBAR</div>
+    <div>Fee (feeBps): <span id="feeBps">-</span> bps</div>
+    <div>Máx adelanto (maxAdvanceBps): <span id="maxAdvanceBps">-</span> bps</div>
+    <button id="refreshInfoBtn">Actualizar info</button>
+  </div>
+
+  <div class="card">
+    <div class="title">Empresa: depositar fondos (HBAR)</div>
+    <input id="depositAmount" type="text" placeholder="Monto en HBAR (ej: 10)" />
+    <button id="depositBtn">Depositar en contrato</button>
+  </div>
+
+  <div class="card">
+    <div class="title">Empresa: registrar empleado</div>
+    <input id="employeeAddress" type="text" placeholder="Dirección del empleado (0x...)" />
+    <input id="employeeSalary" type="text" placeholder="Salario mensual en HBAR (ej: 10)" />
+    <button id="registerBtn">Registrar empleado</button>
+  </div>
+
+  <div class="card">
+    <div class="title">Empleado: ver y pedir adelanto</div>
+    <div>Disponible para adelanto: <span id="availableAdvance">-</span> HBAR</div>
+    <button id="checkAvailableBtn">Ver disponible</button>
+    <input id="advanceAmount" type="text" placeholder="Monto a pedir en HBAR (ej: 3)" />
+    <button id="requestAdvanceBtn">Pedir adelanto</button>
+  </div>
+
+  <script>
+    // 👉 CONFIG: dirección del contrato y ABI
+    const CONTRACT_ADDRESS = "0xFc8c2123DD7CBf88A9ffee55244Adb31489E72c1";
+
+    const CONTRACT_ABI = [
+      {
+        "inputs": [
+          {
+            "internalType": "uint256",
+            "name": "_maxAdvanceBps",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "_feeBps",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+      },
+      {
+        "anonymous": false,
+        "inputs": [
+          {
+            "indexed": false,
+            "internalType": "address",
+            "name": "employee",
+            "type": "address"
+          },
+          {
+            "indexed": false,
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256"
+          },
+          {
+            "indexed": false,
+            "internalType": "uint256",
+            "name": "fee",
+            "type": "uint256"
+          }
+        ],
+        "name": "AdvanceRequested",
+        "type": "event"
+      },
+      {
+        "anonymous": false,
+        "inputs": [
+          {
+            "indexed": false,
+            "internalType": "address",
+            "name": "employee",
+            "type": "address"
+          },
+          {
+            "indexed": false,
+            "internalType": "uint256",
+            "name": "salary",
+            "type": "uint256"
+          }
+        ],
+        "name": "EmployeeRegistered",
+        "type": "event"
+      },
+      {
+        "anonymous": false,
+        "inputs": [
+          {
+            "indexed": false,
+            "internalType": "address",
+            "name": "from",
+            "type": "address"
+          },
+          {
+            "indexed": false,
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256"
+          }
+        ],
+        "name": "FundsDeposited",
+        "type": "event"
+      },
+      {
+        "anonymous": false,
+        "inputs": [],
+        "name": "PeriodReset",
+        "type": "event"
+      },
+      {
+        "inputs": [],
+        "name": "depositFunds",
+        "outputs": [],
+        "stateMutability": "payable",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "",
+            "type": "address"
+          }
+        ],
+        "name": "employees",
+        "outputs": [
+          {
+            "internalType": "uint256",
+            "name": "monthlySalary",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "advancedThisPeriod",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bool",
+            "name": "active",
+            "type": "bool"
+          }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+      },
+      {
+        "inputs": [],
+        "name": "feeBps",
+        "outputs": [
+          {
+            "internalType": "uint256",
+            "name": "",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "_employee",
+            "type": "address"
+          }
+        ],
+        "name": "getAvailableAdvance",
+        "outputs": [
+          {
+            "internalType": "uint256",
+            "name": "",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+      },
+      {
+        "inputs": [],
+        "name": "maxAdvanceBps",
+        "outputs": [
+          {
+            "internalType": "uint256",
+            "name": "",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+      },
+      {
+        "inputs": [],
+        "name": "owner",
+        "outputs": [
+          {
+            "internalType": "address",
+            "name": "",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "_employee",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "_monthlySalary",
+            "type": "uint256"
+          }
+        ],
+        "name": "registerEmployee",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256"
+          }
+        ],
+        "name": "requestAdvance",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+      },
+      {
+        "inputs": [],
+        "name": "resetPeriod",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256"
+          }
+        ],
+        "name": "withdraw",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+      }
+    ];
+
+    let provider;
+    let signer;
+    let contract;
+
+    async function connect() {
+      if (!window.ethereum) {
+        alert("Necesitas MetaMask instalado");
+        return;
+      }
+      try {
+        await window.ethereum.request({ method: "eth_requestAccounts" });
+        provider = new ethers.providers.Web3Provider(window.ethereum);
+        signer = provider.getSigner();
+        contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+
+        const account = await signer.getAddress();
+        document.getElementById("account").innerText = account;
+        document.getElementById("status").innerText = "Conectado a MetaMask (Hedera Testnet).";
+
+        await refreshInfo();
+      } catch (err) {
+        console.error(err);
+        alert("Error al conectar: " + err.message);
+      }
+    }
+
+    async function refreshInfo() {
+      if (!contract || !provider) return;
+      try {
+        const bal = await provider.getBalance(CONTRACT_ADDRESS);
+        document.getElementById("contractBalance").innerText = ethers.utils.formatEther(bal);
+        const fee = await contract.feeBps();
+        const maxAdv = await contract.maxAdvanceBps();
+        document.getElementById("feeBps").innerText = fee.toString();
+        document.getElementById("maxAdvanceBps").innerText = maxAdv.toString();
+      } catch (err) {
+        console.error(err);
+        alert("Error al leer info: " + err.message);
+      }
+    }
+
+    async function depositFunds() {
+      if (!contract || !signer) return;
+      const amountHBAR = document.getElementById("depositAmount").value;
+      if (!amountHBAR) {
+        alert("Escribe un monto en HBAR");
+        return;
+      }
+      try {
+        const tx = await contract.depositFunds({
+          value: ethers.utils.parseEther(amountHBAR)
+        });
+        document.getElementById("status").innerText = "Enviando depósito...";
+        await tx.wait();
+        document.getElementById("status").innerText = "Depósito confirmado ✅";
+        await refreshInfo();
+      } catch (err) {
+        console.error(err);
+        alert("Error al depositar: " + err.message);
+      }
+    }
+
+    async function registerEmployee() {
+      const addr = document.getElementById("employeeAddress").value.trim();
+      const salaryHBAR = document.getElementById("employeeSalary").value.trim();
+      if (!addr || !salaryHBAR) {
+        alert("Pon dirección de empleado y salario en HBAR");
+        return;
+      }
+      try {
+        const salaryWei = ethers.utils.parseEther(salaryHBAR);
+        const tx = await contract.registerEmployee(addr, salaryWei);
+        document.getElementById("status").innerText = "Registrando empleado...";
+        await tx.wait();
+        document.getElementById("status").innerText = "Empleado registrado ✅";
+      } catch (err) {
+        console.error(err);
+        alert("Error al registrar empleado: " + err.message);
+      }
+    }
+
+    async function checkAvailable() {
+      try {
+        const account = await signer.getAddress();
+        const availableWei = await contract.getAvailableAdvance(account);
+        const availableHBAR = ethers.utils.formatEther(availableWei);
+        document.getElementById("availableAdvance").innerText = availableHBAR;
+      } catch (err) {
+        console.error(err);
+        alert("Error al consultar disponible: " + err.message);
+      }
+    }
+
+    async function requestAdvance() {
+      const amountHBAR = document.getElementById("advanceAmount").value.trim();
+      if (!amountHBAR) {
+        alert("Escribe un monto en HBAR");
+        return;
+      }
+      try {
+        const amountWei = ethers.utils.parseEther(amountHBAR);
+        const tx = await contract.requestAdvance(amountWei);
+        document.getElementById("status").innerText = "Solicitando adelanto...";
+        await tx.wait();
+        document.getElementById("status").innerText = "Adelanto confirmado ✅";
+        await refreshInfo();
+        await checkAvailable();
+      } catch (err) {
+        console.error(err);
+        alert("Error al pedir adelanto: " + err.message);
+      }
+    }
+
+    document.getElementById("connectBtn").onclick = connect;
+    document.getElementById("refreshInfoBtn").onclick = refreshInfo;
+    document.getElementById("depositBtn").onclick = depositFunds;
+    document.getElementById("registerBtn").onclick = registerEmployee;
+    document.getElementById("checkAvailableBtn").onclick = checkAvailable;
+    document.getElementById("requestAdvanceBtn").onclick = requestAdvance;
+  </script>
+</body>
+</html>
